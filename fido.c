@@ -34,11 +34,11 @@ unsigned char report_desc[] = {
 };
 
 int
-main(int argc, void *argv[])
+main(int argc, char *argv[])
 {
 	int fd;
 
-	printf("size is %d\n", sizeof(report_desc));
+	printf("size is %ld\n", sizeof(report_desc));
 	if (argc != 2)
 		exit(0);
 	printf("writing file\n");

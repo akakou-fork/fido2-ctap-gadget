@@ -47,7 +47,7 @@ static void process_init(U2FHID_FRAME *frame)
 	int count;
 
 	if (MSG_LEN(*frame) != sizeof(U2FHID_INIT_REQ)) {
-		fprintf(stderr, "INIT message wrong length %d != %d\n",
+		fprintf(stderr, "INIT message wrong length %d != %ld\n",
 			MSG_LEN(*frame),
 			sizeof(U2FHID_INIT_REQ));
 		process_error(frame, ERR_INVALID_LEN);
@@ -63,7 +63,7 @@ static void process_init(U2FHID_FRAME *frame)
 	reply->init.cmd = U2FHID_INIT;
 	reply->init.bcnth = 0;
 	reply->init.bcntl = 17;
-	printf("setting reply size to %d\n", sizeof(*resp));
+	printf("setting reply size to %ld\n", sizeof(*resp));
 	memcpy(resp->nonce, req->nonce, sizeof(req->nonce));
 	resp->cid = 1;
 	resp->versionInterface = U2FHID_IF_VERSION;
