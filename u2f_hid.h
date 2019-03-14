@@ -21,6 +21,7 @@ extern "C" {
 // Size of HID reports 
 
 #define HID_RPT_SIZE            64      // Default size of raw HID report
+#define HID_MAX_PAYLOAD		7609
     
 // Frame layout - command- and continuation frames
 
