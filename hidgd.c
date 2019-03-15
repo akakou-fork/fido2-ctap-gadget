@@ -32,14 +32,39 @@ static void u2f_setbe(int val, uint8_t *buf)
 	buf[1] = val & 0xff;
 }
 
-static void process_error(U2FHID_FRAME *frame, int err)
+static int u2f_getbe(uint8_t *buf)
+{
+	return (buf[0] << 8) + buf[1];
+}
+
+static void u2fhid_set_len(U2FHID_FRAME *frame, int len)
+{
+	frame->init.bcntl = len & 0xff;
+	frame->init.bcnth = (len >> 8) & 0xff;
+}
+
+static int get_apdu(uint8_t **ptr)
+{
+	int len;
+
+	if (**ptr == 0) {
+		len = u2f_getbe(*ptr + 1);
+		*ptr += 3;
+	} else {
+		len = *(*ptr)++;
+	}
+
+	return len;
+}
+
+static void process_error(uint32_t cid, int err)
 {
 	char buf[HID_RPT_SIZE];
 	U2FHID_FRAME *reply = (U2FHID_FRAME *)buf;
 	int count;
 
 	memset(buf, 0, sizeof(buf));
-	reply->cid = frame->cid;
+	reply->cid = cid;
 	reply->init.cmd = U2FHID_ERROR;
 	reply->init.bcnth = 0;
 	reply->init.bcntl = sizeof(reply) + 1;
@@ -64,7 +89,7 @@ static int get_payload(U2FHID_FRAME *frame, uint8_t buf[HID_MAX_PAYLOAD])
 
 		if (c != HID_RPT_SIZE) {
 			fprintf(stderr, "Got short read of sequence packet %d != %d\n", c, HID_RPT_SIZE);
-			process_error(frame, ERR_INVALID_LEN);
+			process_error(frame->cid, ERR_INVALID_LEN);
 			return -ERR_INVALID_LEN;
 		}
 
@@ -76,6 +101,34 @@ static int get_payload(U2FHID_FRAME *frame, uint8_t buf[HID_MAX_PAYLOAD])
 		count += sizeof(frame->cont.data);
 	}
 	return len;
+}
+
+static void send_payload(uint8_t ctap[HID_MAX_PAYLOAD], int len, uint32_t cid)
+{
+	uint8_t buf[HID_RPT_SIZE];
+	U2FHID_FRAME *frame = (U2FHID_FRAME *)buf;
+	int count;
+	int seq = 0;
+
+	/* response bytes at end */
+	u2f_setbe(U2F_SW_NO_ERROR, &ctap[len]);
+	/* account for response bytes */
+	len += 2;
+
+	frame->cid = cid;
+	frame->init.cmd = U2FHID_MSG;
+	u2fhid_set_len(frame, len);
+	count = sizeof(frame->init.data);
+	memcpy(frame->init.data, ctap, count);
+	write(dev, buf, sizeof(buf));
+
+	while (count < len) {
+		frame->cid = cid;
+		frame->cont.seq = seq++;
+		memcpy(frame->cont.data, &ctap[count], sizeof(frame->cont.data));
+		count += sizeof(frame->cont.data);
+		write(dev, buf, sizeof(buf));
+	}
 }
 
 static void process_version(uint32_t cid)
@@ -95,6 +148,41 @@ static void process_version(uint32_t cid)
 	write(dev, buf, sizeof(buf));
 }
 
+static void process_register(uint32_t cid, uint8_t ctap[HID_MAX_PAYLOAD])
+{
+	uint8_t buf[HID_MAX_PAYLOAD];
+	U2F_REGISTER_REQ *req;
+	U2F_REGISTER_RESP *resp = (U2F_REGISTER_RESP *)buf;
+	uint8_t *ptr = &ctap[4];	/* point to APDU lengths */
+	int len;
+
+	len = get_apdu(&ptr);
+	if (len != sizeof(U2F_REGISTER_REQ)) {
+		fprintf(stderr, "Wrong REGISTER REQ len %d != %ld\n",
+			len, sizeof(U2F_REGISTER_REQ));
+		process_error(cid, ERR_INVALID_CMD);
+		return;
+	}
+	len = get_apdu(&ptr);
+	/*
+	 * standard seems to require this but Mozilla doesn't transmit it
+	if (len < sizeof(U2F_REGISTER_RESP)) {
+		fprintf(stderr, "Wrong REGISTER RESP len %d < %ld\n",
+			len, sizeof(U2F_REGISTER_RESP));
+		process_error(cid, ERR_INVALID_CMD);
+		return;
+	}
+	*/
+	req = (U2F_REGISTER_REQ *)ptr;
+	printf("chal[0] = %d, appId[0] = %d\n", req->chal[0], req->appId[0]);
+	memset(buf, 0, sizeof(buf));
+	resp->registerId = 0x05;
+	resp->keyHandleLen = 240;
+	const char *const str = "This is a key handle";
+	strcpy((char *)resp->keyHandleCertSig, str);
+	send_payload(buf, sizeof(U2F_REGISTER_RESP), cid);
+}
+
 static void process_msg(U2FHID_FRAME *frame)
 {
 	uint8_t ctap[HID_MAX_PAYLOAD];
@@ -105,14 +193,18 @@ static void process_msg(U2FHID_FRAME *frame)
 
 	len = get_payload(frame, ctap);
 	if (len < 0) {
-		process_error(frame, -len);
+		process_error(frame->cid, -len);
 		return;
 	}
 	ins = ctap[1];
 	printf("Got CLA=0x%x, ins=0x%x\n", ctap[0], ins);
 
 	if (ins == U2F_VERSION) {
+		printf("U2F VERSION\n");
 		process_version(cid);
+	} else if (ins == U2F_REGISTER) {
+		printf("U2F REGISTER\n");
+		process_register(cid, ctap);
 	} else {
 		printf("Unrecognized command 0x%x\n", ins);
 	}
@@ -130,12 +222,12 @@ static void process_init(U2FHID_FRAME *frame)
 		fprintf(stderr, "INIT message wrong length %d != %ld\n",
 			MSG_LEN(*frame),
 			sizeof(U2FHID_INIT_REQ));
-		process_error(frame, ERR_INVALID_LEN);
+		process_error(frame->cid, ERR_INVALID_LEN);
 		return;
 	}
 	if (frame->cid != CID_BROADCAST) {
 		fprintf(stderr, "INIT message to wrong cid %x\n", frame->cid);
-		process_error(frame, ERR_INVALID_CMD);
+		process_error(frame->cid, ERR_INVALID_CMD);
 		return;
 	}
 	memset(buf, 0, sizeof(buf));
@@ -168,7 +260,7 @@ static void command_loop(void)
 		process_msg(frame);
 	} else {
 		printf("Got unknown command 0x%x\n", FRAME_CMD(*frame));
-		process_error(frame, ERR_INVALID_CMD);
+		process_error(frame->cid, ERR_INVALID_CMD);
 	}
 }
 
