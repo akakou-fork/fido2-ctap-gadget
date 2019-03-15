@@ -103,7 +103,8 @@ static int get_payload(U2FHID_FRAME *frame, uint8_t buf[HID_MAX_PAYLOAD])
 	return len;
 }
 
-static void send_payload(uint8_t ctap[HID_MAX_PAYLOAD], int len, uint32_t cid)
+static void send_payload(uint8_t ctap[HID_MAX_PAYLOAD], int len, uint32_t cid,
+			 int err)
 {
 	uint8_t buf[HID_RPT_SIZE];
 	U2FHID_FRAME *frame = (U2FHID_FRAME *)buf;
@@ -111,7 +112,7 @@ static void send_payload(uint8_t ctap[HID_MAX_PAYLOAD], int len, uint32_t cid)
 	int seq = 0;
 
 	/* response bytes at end */
-	u2f_setbe(U2F_SW_NO_ERROR, &ctap[len]);
+	u2f_setbe(err, &ctap[len]);
 	/* account for response bytes */
 	len += 2;
 
@@ -148,6 +149,8 @@ static void process_version(uint32_t cid)
 	write(dev, buf, sizeof(buf));
 }
 
+const char keystr[] = "This is a key handle";
+
 static void process_register(uint32_t cid, uint8_t ctap[HID_MAX_PAYLOAD])
 {
 	uint8_t buf[HID_MAX_PAYLOAD];
@@ -163,9 +166,9 @@ static void process_register(uint32_t cid, uint8_t ctap[HID_MAX_PAYLOAD])
 		process_error(cid, ERR_INVALID_CMD);
 		return;
 	}
-	len = get_apdu(&ptr);
 	/*
 	 * standard seems to require this but Mozilla doesn't transmit it
+	len = get_apdu(&ptr);
 	if (len < sizeof(U2F_REGISTER_RESP)) {
 		fprintf(stderr, "Wrong REGISTER RESP len %d < %ld\n",
 			len, sizeof(U2F_REGISTER_RESP));
@@ -176,11 +179,55 @@ static void process_register(uint32_t cid, uint8_t ctap[HID_MAX_PAYLOAD])
 	req = (U2F_REGISTER_REQ *)ptr;
 	printf("chal[0] = %d, appId[0] = %d\n", req->chal[0], req->appId[0]);
 	memset(buf, 0, sizeof(buf));
-	resp->registerId = 0x05;
-	resp->keyHandleLen = 240;
-	const char *const str = "This is a key handle";
-	strcpy((char *)resp->keyHandleCertSig, str);
-	send_payload(buf, sizeof(U2F_REGISTER_RESP), cid);
+	resp->registerId = U2F_REGISTER_ID;
+	resp->keyHandleLen = sizeof(keystr); /* include trailing 0 */
+	strcpy((char *)resp->keyHandleCertSig, keystr);
+	send_payload(buf, sizeof(U2F_REGISTER_RESP), cid, U2F_SW_NO_ERROR);
+}
+
+static void process_authenticate(uint32_t cid, uint8_t ctap[HID_MAX_PAYLOAD])
+{
+	uint8_t buf[HID_MAX_PAYLOAD];
+	U2F_AUTHENTICATE_REQ *req;
+	U2F_AUTHENTICATE_RESP *resp = (U2F_AUTHENTICATE_RESP *)buf;
+	uint8_t *ptr = &ctap[4];	/* point to APDU lengths */
+	int len;
+
+	len = get_apdu(&ptr);
+	if (len > sizeof(U2F_AUTHENTICATE_REQ)) {
+		fprintf(stderr, "Wrong AUTHENTICATE REQ len %d > %ld\n",
+			len, sizeof(U2F_AUTHENTICATE_REQ));
+		process_error(cid, ERR_INVALID_CMD);
+		return;
+	}
+	/*
+	 * standard seems to require this but Mozilla doesn't transmit it
+	len = get_apdu(&ptr);
+	if (len < sizeof(U2F_AUTHENTICATE_RESP)) {
+		fprintf(stderr, "Wrong AUTHENTICATE RESP len %d < %ld\n",
+			len, sizeof(U2F_AUTHENTICATE_RESP));
+		process_error(cid, ERR_INVALID_CMD);
+		return;
+	}
+	*/
+	req = (U2F_AUTHENTICATE_REQ *)ptr;
+	if (req->keyHandleLen != sizeof(keystr)) {
+		fprintf(stderr, "Wrong keystr len %d != %ld\n",
+			req->keyHandleLen, sizeof(keystr));
+		process_error(cid, ERR_INVALID_CMD);
+		return;
+	}
+	if (strcmp((char *)req->keyHandle, keystr) != 0) {
+			fprintf(stderr, "Wrong keystr '%s' != '%s'\n",
+			req->keyHandle, keystr);
+		process_error(cid, ERR_INVALID_CMD);
+		return;
+	}
+	memset(buf, 0, sizeof(buf));
+	resp->flags = U2F_AUTH_FLAG_TUP; /* pretend we have user presence */
+	send_payload(buf, sizeof(U2F_AUTHENTICATE_RESP), cid,
+		     ctap[2] == U2F_AUTH_CHECK_ONLY ?
+		     U2F_SW_CONDITIONS_NOT_SATISFIED : U2F_SW_NO_ERROR);
 }
 
 static void process_msg(U2FHID_FRAME *frame)
@@ -205,8 +252,12 @@ static void process_msg(U2FHID_FRAME *frame)
 	} else if (ins == U2F_REGISTER) {
 		printf("U2F REGISTER\n");
 		process_register(cid, ctap);
+	} else if (ins == U2F_AUTHENTICATE) {
+		printf("U2F_AUTHENTICATE\n");
+		process_authenticate(cid, ctap);
 	} else {
 		printf("Unrecognized command 0x%x\n", ins);
+		process_error(cid, ERR_INVALID_CMD);
 	}
 }
 
