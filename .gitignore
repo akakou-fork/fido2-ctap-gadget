@@ -2,6 +2,7 @@
 *.lo
 *.o
 *~
+*.1
 .deps
 .libs
 configure

@@ -1,0 +1,6 @@
+[name]
+hidgd - hid gadget daemon
+
+[description]
+
+Handles the hidg end of a FIDO2 device
