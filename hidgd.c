@@ -8,6 +8,7 @@
 
 
 #include <fcntl.h>
+#include <getopt.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,6 +21,24 @@
 #include "u2f_hid.h"
 
 static int dev;
+
+static const char *cert = NULL;
+
+static struct option long_options[] = {
+	{"help", 0, 0, 'h'},
+	{"version", 0, 0, 'v'},
+	{0, 0, 0, 0,}
+};
+
+static void usage(char *argv0, FILE *f)
+{
+	fprintf(f, "Usage: %s [options] <hidg device> <certificate file>\n\n"
+		"Options:\n"
+		"\t-h, --help                print this help message\n"
+		"\t-v, --version             print package version\n"
+		"\n",
+		argv0);
+}
 
 /*
  * The FIDO protocol has got to be one of the most screwed
@@ -315,16 +334,53 @@ static void command_loop(void)
 	}
 }
 
-int main(int argc, const char *argv[])
+int main(int argc, char *argv[])
 {
-	if (argc != 2) {
-		fprintf(stderr, "need hidg device\n");
+	const char *file;
+
+	for (;;) {
+		int c, option_index;
+
+		c = getopt_long(argc, argv, "hv",
+				long_options, &option_index);
+		if (c == -1)
+			break;
+
+		switch (c) {
+		case 'h':
+			usage(argv[0], stdout);
+			exit(0);
+		case 'v':
+			fprintf(stdout, "%s " VERSION "\n"
+				"Copyright 2019 by James Bottomley\n"
+				"License GPL-2.0-only\n"
+				"Written by James Bottomley <James.Bottomley@HansenPartnership.com>\n",
+					argv[0]);
+			exit(0);
+		default:
+			usage(argv[0], stderr);
+			exit(1);
+		}
+	}
+
+	if (optind > argc - 2) {
+		fprintf(stderr, "too few arguments\n");
+		usage(argv[0], stderr);
+		exit(1);
+	}
+	if (optind < argc -2) {
+		fprintf(stderr, "too many arguments\n");
+		usage(argv[0], stderr);
 		exit(1);
 	}
 
-	dev = open(argv[1], O_RDWR);
+	cert = argv[argc - 1];
+	file = argv[argc - 2];
+
+	dev = open(file, O_RDWR);
 	if (dev < 0) {
-		perror("Failed to open HIDG");
+		fprintf(stderr, "Failed to open %s: ", file);
+		perror("");
 		exit(1);
 	}
 
