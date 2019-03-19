@@ -21,8 +21,7 @@
 #include "u2f_hid.h"
 
 static int dev;
-
-static const char *cert = NULL;
+static int certd;
 
 static struct option long_options[] = {
 	{"help", 0, 0, 'h'},
@@ -201,6 +200,16 @@ static void process_register(uint32_t cid, uint8_t ctap[HID_MAX_PAYLOAD])
 	resp->registerId = U2F_REGISTER_ID;
 	resp->keyHandleLen = sizeof(keystr); /* include trailing 0 */
 	strcpy((char *)resp->keyHandleCertSig, keystr);
+	ptr = &resp->keyHandleCertSig[resp->keyHandleLen];
+	/* place the DER encoded cert into the buffer */
+	lseek(certd, 0, SEEK_SET);
+	len = read(certd, ptr, sizeof(buf) - (ptr - buf));
+	if (len < 0) {
+		perror("Failed to load cert into reply");
+		process_error(cid, ERR_INVALID_CMD);
+		return;
+	}
+
 	send_payload(buf, sizeof(U2F_REGISTER_RESP), cid, U2F_SW_NO_ERROR);
 }
 
@@ -336,7 +345,7 @@ static void command_loop(void)
 
 int main(int argc, char *argv[])
 {
-	const char *file;
+	const char *file, *cert;
 
 	for (;;) {
 		int c, option_index;
@@ -380,6 +389,13 @@ int main(int argc, char *argv[])
 	dev = open(file, O_RDWR);
 	if (dev < 0) {
 		fprintf(stderr, "Failed to open %s: ", file);
+		perror("");
+		exit(1);
+	}
+
+	certd = open(cert, O_RDWR);
+	if (certd < 0) {
+		fprintf(stderr, "Failed to open %s: ", cert);
 		perror("");
 		exit(1);
 	}

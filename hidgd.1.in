@@ -3,4 +3,6 @@ hidgd - hid gadget daemon
 
 [description]
 
-Handles the hidg end of a FIDO2 device
+Handles the hidg end of a FIDO2 device.  Note that the certificate
+file is simply placed straight into the register reply and therefore
+must be correctly DER encoded.
