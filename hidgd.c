@@ -24,11 +24,12 @@
 static int dev;
 static int certd;
 
-static const uint32_t parent = 0x81000101;
+static uint32_t parent = 0x81000101;
 
 static struct option long_options[] = {
 	{"help", 0, 0, 'h'},
 	{"version", 0, 0, 'v'},
+	{"parent", 1, 0, 'p'},
 	{0, 0, 0, 0,}
 };
 
@@ -38,6 +39,7 @@ static void usage(char *argv0, FILE *f)
 		"Options:\n"
 		"\t-h, --help                print this help message\n"
 		"\t-v, --version             print package version\n"
+		"\t-p, --parent              Specify the parent key\n"
 		"\n",
 		argv0);
 }
@@ -356,7 +358,7 @@ int main(int argc, char *argv[])
 	for (;;) {
 		int c, option_index;
 
-		c = getopt_long(argc, argv, "hv",
+		c = getopt_long(argc, argv, "hvp:",
 				long_options, &option_index);
 		if (c == -1)
 			break;
@@ -372,6 +374,9 @@ int main(int argc, char *argv[])
 				"Written by James Bottomley <James.Bottomley@HansenPartnership.com>\n",
 					argv[0]);
 			exit(0);
+		case 'p':
+			parent = strtoul(optarg, NULL, 16);
+			break;
 		default:
 			usage(argv[0], stderr);
 			exit(1);
