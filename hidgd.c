@@ -19,9 +19,12 @@
 
 #include "u2f.h"
 #include "u2f_hid.h"
+#include "hidgd-tpm.h"
 
 static int dev;
 static int certd;
+
+static const uint32_t parent = 0x81000101;
 
 static struct option long_options[] = {
 	{"help", 0, 0, 'h'},
@@ -198,6 +201,7 @@ static void process_register(uint32_t cid, uint8_t ctap[HID_MAX_PAYLOAD])
 	printf("chal[0] = %d, appId[0] = %d\n", req->chal[0], req->appId[0]);
 	memset(buf, 0, sizeof(buf));
 	resp->registerId = U2F_REGISTER_ID;
+	tpm_get_public_point(parent, &resp->pubKey);
 	resp->keyHandleLen = sizeof(keystr); /* include trailing 0 */
 	strcpy((char *)resp->keyHandleCertSig, keystr);
 	ptr = &resp->keyHandleCertSig[resp->keyHandleLen];
@@ -209,8 +213,10 @@ static void process_register(uint32_t cid, uint8_t ctap[HID_MAX_PAYLOAD])
 		process_error(cid, ERR_INVALID_CMD);
 		return;
 	}
+	ptr += len;
+	ptr += tpm_fill_register_sig(parent, req, resp, ptr);
 
-	send_payload(buf, sizeof(U2F_REGISTER_RESP), cid, U2F_SW_NO_ERROR);
+	send_payload(buf, ptr - buf, cid, U2F_SW_NO_ERROR);
 }
 
 static void process_authenticate(uint32_t cid, uint8_t ctap[HID_MAX_PAYLOAD])

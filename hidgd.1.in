@@ -6,3 +6,11 @@ hidgd - hid gadget daemon
 Handles the hidg end of a FIDO2 device.  Note that the certificate
 file is simply placed straight into the register reply and therefore
 must be correctly DER encoded.
+
+[examples]
+
+Create a master parent key and place it at 81000101
+
+openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:prime256v1 -pkeyopt ec_param_enc:named_curve -out parent_key.key
+create_tpm2_key -w parent_key.key parent_key.tpm
+load_tpm2_key parent_key.tpm 8100101
