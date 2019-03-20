@@ -25,7 +25,8 @@ static int dev;
 static int certd;
 static void *key;
 
-static uint32_t parent = 0x81000101;
+/* choose TPM default parent */
+static uint32_t parent = 0;
 
 static struct option long_options[] = {
 	{"help", 0, 0, 'h'},

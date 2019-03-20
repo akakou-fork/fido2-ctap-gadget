@@ -31,7 +31,6 @@ static void tpm2_error(TPM_RC rc, const char *reason)
 	fprintf(stderr, "%s%s%s\n", msg, submsg, num);
 }
 
-#if 0
 static void tpm2_rm_keyfile(TPM_HANDLE key)
 {
         char keyfile[1024];
@@ -41,7 +40,6 @@ static void tpm2_rm_keyfile(TPM_HANDLE key)
         snprintf(keyfile, sizeof(keyfile), "%s/hp%08x.bin", dir, key);
         unlink(keyfile);
 }
-#endif
 
 static void tpm2_delete(void)
 {
@@ -88,6 +86,96 @@ static TPM_RC tpm2_create(void)
 	return TPM_RC_SUCCESS;
 }
 
+static TPM_HANDLE tpm2_create_primary(uint32_t hierarchy)
+{
+	TPM_RC rc;
+	CreatePrimary_In in;
+	CreatePrimary_Out out;
+
+	/* SPS owner */
+	in.primaryHandle = hierarchy;
+
+	in.inSensitive.sensitive.userAuth.t.size = 0;
+
+	/* no sensitive date for storage keys */
+	in.inSensitive.sensitive.data.t.size = 0;
+	/* no outside info */
+	in.outsideInfo.t.size = 0;
+	/* no PCR state */
+	in.creationPCR.count = 0;
+
+	/* public parameters for an ECC key  */
+	in.inPublic.publicArea.type = TPM_ALG_ECC;
+	in.inPublic.publicArea.nameAlg = TPM_ALG_SHA256;
+	in.inPublic.publicArea.objectAttributes.val =
+		TPMA_OBJECT_NODA |
+		TPMA_OBJECT_SENSITIVEDATAORIGIN |
+		TPMA_OBJECT_FIXEDPARENT |
+		TPMA_OBJECT_FIXEDTPM |
+		TPMA_OBJECT_USERWITHAUTH |
+		TPMA_OBJECT_DECRYPT |
+		TPMA_OBJECT_RESTRICTED;
+
+	in.inPublic.publicArea.parameters.eccDetail.symmetric.algorithm = TPM_ALG_AES;
+	in.inPublic.publicArea.parameters.eccDetail.symmetric.keyBits.aes = 128;
+	in.inPublic.publicArea.parameters.eccDetail.symmetric.mode.aes = TPM_ALG_CFB;
+	in.inPublic.publicArea.parameters.eccDetail.scheme.scheme = TPM_ALG_NULL;
+	in.inPublic.publicArea.parameters.eccDetail.curveID = TPM_ECC_NIST_P256;
+	in.inPublic.publicArea.parameters.eccDetail.kdf.scheme = TPM_ALG_NULL;
+
+	in.inPublic.publicArea.unique.ecc.x.t.size = 0;
+	in.inPublic.publicArea.unique.ecc.y.t.size = 0;
+	in.inPublic.publicArea.authPolicy.t.size = 0;
+
+	rc = TSS_Execute(tssContext,
+			 (RESPONSE_PARAMETERS *)&out,
+			 (COMMAND_PARAMETERS *)&in,
+			 NULL,
+			 TPM_CC_CreatePrimary,
+			 TPM_RS_PW, NULL, 0,
+			 TPM_RH_NULL, NULL, 0);
+
+	if (rc) {
+		tpm2_error(rc, "TSS_CreatePrimary");
+		return 0;
+	}
+
+	return out.objectHandle;
+}
+
+static void tpm2_flush_handle(TPM_HANDLE h)
+{
+	FlushContext_In in;
+
+	if (!h)
+		return;
+
+	in.flushHandle = h;
+	TSS_Execute(tssContext, NULL,
+		    (COMMAND_PARAMETERS *)&in,
+		    NULL,
+		    TPM_CC_FlushContext,
+		    TPM_RH_NULL, NULL, 0);
+}
+
+static uint32_t tpm2_get_parent(uint32_t parent)
+{
+	if (parent == 0)
+		/* choose default parent */
+		parent = TPM_RH_OWNER;
+	if ((parent & 0xff000000) == 0x40000000)
+		parent = tpm2_create_primary(parent);
+
+	return parent;
+}
+
+static void tpm2_put_parent(uint32_t parent)
+{
+	if ((parent & 0xff000000) == 0x80000000)
+		tpm2_flush_handle(parent);
+	tpm2_rm_keyfile(parent);
+}
+
 int tpm_get_public_point(uint32_t parent, U2F_EC_POINT *pub, uint8_t *handle)
 {
 	Create_In in;
@@ -100,6 +188,8 @@ int tpm_get_public_point(uint32_t parent, U2F_EC_POINT *pub, uint8_t *handle)
 	rc = tpm2_create();
 	if (rc)
 		return 0;
+
+	parent = tpm2_get_parent(parent);
 
 	in.inPublic.publicArea.type = TPM_ALG_ECC;
 	in.inPublic.publicArea.nameAlg = TPM_ALG_SHA256;
@@ -129,6 +219,7 @@ int tpm_get_public_point(uint32_t parent, U2F_EC_POINT *pub, uint8_t *handle)
 			 TPM_CC_Create,
 			 TPM_RS_PW, NULL, 0,
 			 TPM_RH_NULL, NULL, 0);
+	tpm2_put_parent(parent);
 	tpm2_delete();
 	if (rc) {
 		tpm2_error(rc, "TPM2_Create");
