@@ -6,7 +6,7 @@ fido_SOURCES=fido.c
 
 AM_CFLAGS=-Wall -Werror
 
-hidgd_SOURCES=hidgd.c u2f.h u2f_hid.h tpm.c hidgd-tpm.h
+hidgd_SOURCES=hidgd.c u2f.h u2f_hid.h tpm.c hidgd-tpm.h crypto.c
 hidgd_CFLAGS=-I@TSSINCLUDE@ ${CRYPTO_CFLAGS} ${AM_CFLAGS}
 hidgd_LDADD=${CRYPTO_LIBS}
 

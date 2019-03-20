@@ -19,10 +19,11 @@
 
 #include "u2f.h"
 #include "u2f_hid.h"
-#include "hidgd-tpm.h"
+#include "hidgd.h"
 
 static int dev;
 static int certd;
+static void *key;
 
 static uint32_t parent = 0x81000101;
 
@@ -35,7 +36,7 @@ static struct option long_options[] = {
 
 static void usage(char *argv0, FILE *f)
 {
-	fprintf(f, "Usage: %s [options] <hidg device> <certificate file>\n\n"
+	fprintf(f, "Usage: %s [options] <hidg device> <certificate file> <key file>\n\n"
 		"Options:\n"
 		"\t-h, --help                print this help message\n"
 		"\t-v, --version             print package version\n"
@@ -172,8 +173,6 @@ static void process_version(uint32_t cid)
 	write(dev, buf, sizeof(buf));
 }
 
-const char keystr[] = "This is a key handle";
-
 static void process_register(uint32_t cid, uint8_t ctap[HID_MAX_PAYLOAD])
 {
 	uint8_t buf[HID_MAX_PAYLOAD];
@@ -203,9 +202,9 @@ static void process_register(uint32_t cid, uint8_t ctap[HID_MAX_PAYLOAD])
 	printf("chal[0] = %d, appId[0] = %d\n", req->chal[0], req->appId[0]);
 	memset(buf, 0, sizeof(buf));
 	resp->registerId = U2F_REGISTER_ID;
-	tpm_get_public_point(parent, &resp->pubKey);
-	resp->keyHandleLen = sizeof(keystr); /* include trailing 0 */
-	strcpy((char *)resp->keyHandleCertSig, keystr);
+	resp->keyHandleLen = tpm_get_public_point(parent, &resp->pubKey,
+						  resp->keyHandleCertSig);
+
 	ptr = &resp->keyHandleCertSig[resp->keyHandleLen];
 	/* place the DER encoded cert into the buffer */
 	lseek(certd, 0, SEEK_SET);
@@ -216,7 +215,7 @@ static void process_register(uint32_t cid, uint8_t ctap[HID_MAX_PAYLOAD])
 		return;
 	}
 	ptr += len;
-	ptr += tpm_fill_register_sig(parent, req, resp, ptr);
+	ptr += crypto_fill_register_sig(parent, req, resp, ptr, key);
 
 	send_payload(buf, ptr - buf, cid, U2F_SW_NO_ERROR);
 }
@@ -230,12 +229,15 @@ static void process_authenticate(uint32_t cid, uint8_t ctap[HID_MAX_PAYLOAD])
 	int len;
 
 	len = get_apdu(&ptr);
+	(void)len;
+	/*
 	if (len > sizeof(U2F_AUTHENTICATE_REQ)) {
 		fprintf(stderr, "Wrong AUTHENTICATE REQ len %d > %ld\n",
 			len, sizeof(U2F_AUTHENTICATE_REQ));
 		process_error(cid, ERR_INVALID_CMD);
 		return;
 	}
+	*/
 	/*
 	 * standard seems to require this but Mozilla doesn't transmit it
 	len = get_apdu(&ptr);
@@ -247,18 +249,8 @@ static void process_authenticate(uint32_t cid, uint8_t ctap[HID_MAX_PAYLOAD])
 	}
 	*/
 	req = (U2F_AUTHENTICATE_REQ *)ptr;
-	if (req->keyHandleLen != sizeof(keystr)) {
-		fprintf(stderr, "Wrong keystr len %d != %ld\n",
-			req->keyHandleLen, sizeof(keystr));
-		process_error(cid, ERR_INVALID_CMD);
-		return;
-	}
-	if (strcmp((char *)req->keyHandle, keystr) != 0) {
-			fprintf(stderr, "Wrong keystr '%s' != '%s'\n",
-			req->keyHandle, keystr);
-		process_error(cid, ERR_INVALID_CMD);
-		return;
-	}
+	(void)*req;
+
 	memset(buf, 0, sizeof(buf));
 	resp->flags = U2F_AUTH_FLAG_TUP; /* pretend we have user presence */
 	send_payload(buf, sizeof(U2F_AUTHENTICATE_RESP), cid,
@@ -353,7 +345,7 @@ static void command_loop(void)
 
 int main(int argc, char *argv[])
 {
-	const char *file, *cert;
+	const char *file, *cert, *keyfile;
 
 	for (;;) {
 		int c, option_index;
@@ -383,19 +375,20 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	if (optind > argc - 2) {
+	if (optind > argc - 3) {
 		fprintf(stderr, "too few arguments\n");
 		usage(argv[0], stderr);
 		exit(1);
 	}
-	if (optind < argc -2) {
+	if (optind < argc - 3) {
 		fprintf(stderr, "too many arguments\n");
 		usage(argv[0], stderr);
 		exit(1);
 	}
 
-	cert = argv[argc - 1];
-	file = argv[argc - 2];
+	keyfile = argv[argc - 1];
+	cert = argv[argc - 2];
+	file = argv[argc - 3];
 
 	dev = open(file, O_RDWR);
 	if (dev < 0) {
@@ -408,6 +401,12 @@ int main(int argc, char *argv[])
 	if (certd < 0) {
 		fprintf(stderr, "Failed to open %s: ", cert);
 		perror("");
+		exit(1);
+	}
+
+	key = crypto_load_key(keyfile);
+	if (key == NULL) {
+		fprintf(stderr, "Failed to open %s: ", keyfile);
 		exit(1);
 	}
 

@@ -13,10 +13,11 @@
 #include <tss.h>
 #include <tssresponsecode.h>
 #include <tsscryptoh.h>
+#include <tssmarshal.h>
 
 #include <openssl/ecdsa.h>
 
-#include "hidgd-tpm.h"
+#include "hidgd.h"
 
 static char *dir = NULL;
 static TSS_CONTEXT *tssContext;
@@ -30,6 +31,7 @@ static void tpm2_error(TPM_RC rc, const char *reason)
 	fprintf(stderr, "%s%s%s\n", msg, submsg, num);
 }
 
+#if 0
 static void tpm2_rm_keyfile(TPM_HANDLE key)
 {
         char keyfile[1024];
@@ -39,6 +41,7 @@ static void tpm2_rm_keyfile(TPM_HANDLE key)
         snprintf(keyfile, sizeof(keyfile), "%s/hp%08x.bin", dir, key);
         unlink(keyfile);
 }
+#endif
 
 static void tpm2_delete(void)
 {
@@ -85,96 +88,72 @@ static TPM_RC tpm2_create(void)
 	return TPM_RC_SUCCESS;
 }
 
-void tpm_get_public_point(uint32_t handle, U2F_EC_POINT *pub)
+int tpm_get_public_point(uint32_t parent, U2F_EC_POINT *pub, uint8_t *handle)
 {
-	ReadPublic_In in;
-	ReadPublic_Out out;
+	Create_In in;
+	Create_Out out;
 	TPM_RC rc;
+	INT32 size;
+	uint16_t len;
 	TPMS_ECC_POINT *pt;
 
 	rc = tpm2_create();
 	if (rc)
-		return;
+		return 0;
 
-	in.objectHandle = handle;
+	in.inPublic.publicArea.type = TPM_ALG_ECC;
+	in.inPublic.publicArea.nameAlg = TPM_ALG_SHA256;
+	in.inPublic.publicArea.authPolicy.t.size = 0;
+	in.inPublic.publicArea.objectAttributes.val =
+		TPMA_OBJECT_SIGN |
+		TPMA_OBJECT_USERWITHAUTH |
+		TPMA_OBJECT_NODA |
+		TPMA_OBJECT_SENSITIVEDATAORIGIN;
+	in.inPublic.publicArea.parameters.eccDetail.symmetric.algorithm = TPM_ALG_NULL;
+        in.inPublic.publicArea.parameters.eccDetail.scheme.scheme = TPM_ALG_NULL;
+        in.inPublic.publicArea.parameters.eccDetail.curveID = TPM_ECC_NIST_P256;
+        in.inPublic.publicArea.parameters.eccDetail.kdf.scheme = TPM_ALG_NULL;
+        in.inPublic.publicArea.unique.ecc.x.t.size = 0;
+        in.inPublic.publicArea.unique.ecc.y.t.size = 0;
+
+	in.inSensitive.sensitive.userAuth.b.size = 0;
+	in.inSensitive.sensitive.data.t.size = 0;
+	in.parentHandle = parent;
+	in.outsideInfo.t.size = 0;
+	in.creationPCR.count = 0;
 
 	rc = TSS_Execute(tssContext,
 			 (RESPONSE_PARAMETERS *)&out,
 			 (COMMAND_PARAMETERS *)&in,
 			 NULL,
-			 TPM_CC_ReadPublic,
+			 TPM_CC_Create,
+			 TPM_RS_PW, NULL, 0,
 			 TPM_RH_NULL, NULL, 0);
+	tpm2_delete();
 	if (rc) {
-		tpm2_error(rc, "TPM2_ReadPublic");
-		return;
+		tpm2_error(rc, "TPM2_Create");
+		return 0;
 	}
+
+	size = 255;		/* max by U2F standard */
+	len = 0;
+	rc = TSS_TPM2B_PUBLIC_Marshal(&out.outPublic, &len, &handle, &size);
+	if (rc) {
+		tpm2_error(rc, "PUBLIC_Marshal");
+		return 0;
+	}
+	rc = TSS_TPM2B_PRIVATE_Marshal(&out.outPrivate, &len, &handle, &size);
+	if (rc) {
+		tpm2_error(rc, "PRIVATE_Marshal");
+		return 0;
+	}
+
 	pt = &out.outPublic.publicArea.unique.ecc;
 	pub->pointFormat = U2F_POINT_UNCOMPRESSED;
 	printf("PUBLIC POINTS  %d,%d\n", pt->x.t.size, pt->y.t.size);
 	memcpy(pub->x, pt->x.t.buffer, pt->x.t.size);
 	memcpy(pub->y, pt->y.t.buffer, pt->y.t.size);
 	printf("DONE\n");
-}
-
-int tpm_fill_register_sig(uint32_t parent, U2F_REGISTER_REQ *req,
-			  U2F_REGISTER_RESP *resp, uint8_t *sig)
-{
-	TPMT_HA digest;
-	TPM_RC rc;
-	Sign_In in;
-	Sign_Out out;
-	uint8_t prefix[1];
-	ECDSA_SIG *osig;
-	BIGNUM *r,*s;
-	int len;
-
-	/* conventional prefix containing zero byte */
-	prefix[0] = 0x00;
-
-	digest.hashAlg = TPM_ALG_SHA256;
-
-	TSS_Hash_Generate(&digest,
-			  sizeof(prefix), prefix,
-			  sizeof(req->appId), req->appId,
-			  sizeof(req->chal), req->chal,
-			  resp->keyHandleLen, resp->keyHandleCertSig,
-			  sizeof(resp->pubKey), &resp->pubKey,
-			  0, NULL);
-
-	in.inScheme.details.ecdsa.hashAlg = digest.hashAlg;
-	in.keyHandle = parent;
-	in.inScheme.scheme = TPM_ALG_ECDSA;
-	in.digest.t.size = TSS_GetDigestSize(digest.hashAlg);
-	memcpy(in.digest.t.buffer, digest.digest.tssmax, in.digest.t.size);
-	in.validation.tag = TPM_ST_HASHCHECK;
-	in.validation.hierarchy = TPM_RH_NULL;
-	in.validation.digest.t.size = 0;
-
-	rc = TSS_Execute(tssContext,
-                         (RESPONSE_PARAMETERS *)&out,
-                         (COMMAND_PARAMETERS *)&in,
-                         NULL,
-                         TPM_CC_Sign,
-			 TPM_RS_PW, NULL, 0,
-                         TPM_RH_NULL, NULL, 0);
-        if (rc) {
-                tpm2_error(rc, "TPM2_Sign");
-		return 0;
-        }
-
-	osig = ECDSA_SIG_new();
-	r = BN_bin2bn(out.signature.signature.ecdsa.signatureR.t.buffer,
-                      out.signature.signature.ecdsa.signatureR.t.size,
-                      NULL);
-        s = BN_bin2bn(out.signature.signature.ecdsa.signatureS.t.buffer,
-                      out.signature.signature.ecdsa.signatureS.t.size,
-                      NULL);
-	ECDSA_SIG_set0(osig, r, s);
-	len = i2d_ECDSA_SIG(osig, &sig);
-	ECDSA_SIG_free(osig);
-
-	tpm2_rm_keyfile(parent);
-	tpm2_delete();
 
 	return len;
 }
