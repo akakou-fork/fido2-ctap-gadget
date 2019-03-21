@@ -227,18 +227,11 @@ static void process_authenticate(uint32_t cid, uint8_t ctap[HID_MAX_PAYLOAD])
 	U2F_AUTHENTICATE_REQ *req;
 	U2F_AUTHENTICATE_RESP *resp = (U2F_AUTHENTICATE_RESP *)buf;
 	uint8_t *ptr = &ctap[4];	/* point to APDU lengths */
+	int err = U2F_SW_NO_ERROR;
 	int len;
 
 	len = get_apdu(&ptr);
-	(void)len;
-	/*
-	if (len > sizeof(U2F_AUTHENTICATE_REQ)) {
-		fprintf(stderr, "Wrong AUTHENTICATE REQ len %d > %ld\n",
-			len, sizeof(U2F_AUTHENTICATE_REQ));
-		process_error(cid, ERR_INVALID_CMD);
-		return;
-	}
-	*/
+
 	/*
 	 * standard seems to require this but Mozilla doesn't transmit it
 	len = get_apdu(&ptr);
@@ -250,13 +243,38 @@ static void process_authenticate(uint32_t cid, uint8_t ctap[HID_MAX_PAYLOAD])
 	}
 	*/
 	req = (U2F_AUTHENTICATE_REQ *)ptr;
-	(void)*req;
+
+	if (len != U2F_CHAL_SIZE + U2F_APPID_SIZE + 1 + req->keyHandleLen) {
+		fprintf(stderr, "Wrong AUTHENTICATE REQ len %d > %ld\n",
+			len, sizeof(U2F_AUTHENTICATE_REQ));
+		process_error(cid, ERR_INVALID_CMD);
+		return;
+	}
 
 	memset(buf, 0, sizeof(buf));
+
+	if (ctap[2] == U2F_AUTH_CHECK_ONLY) {
+		len = 0;
+		if (tpm_check_key(parent, req->keyHandleLen, req->keyHandle))
+			/* yes this is the success return */
+			err = U2F_SW_CONDITIONS_NOT_SATISFIED;
+		else
+			err = U2F_SW_WRONG_DATA;
+		goto send;
+	}
+	len = tpm_sign(parent, req, resp->ctr, resp->sig);
+	if (len) {
+		err = U2F_SW_NO_ERROR;
+		/* tpm_sign returns signature length, so account for
+		 * user presence and counter */
+		len += 5;
+	} else {
+		err = U2F_SW_WRONG_DATA;
+	}
+
+ send:
 	resp->flags = U2F_AUTH_FLAG_TUP; /* pretend we have user presence */
-	send_payload(buf, sizeof(U2F_AUTHENTICATE_RESP), cid,
-		     ctap[2] == U2F_AUTH_CHECK_ONLY ?
-		     U2F_SW_CONDITIONS_NOT_SATISFIED : U2F_SW_NO_ERROR);
+	send_payload(buf, len, cid, err);
 }
 
 static void process_msg(U2FHID_FRAME *frame)

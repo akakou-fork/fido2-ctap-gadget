@@ -14,6 +14,7 @@
 #include <tssresponsecode.h>
 #include <tsscryptoh.h>
 #include <tssmarshal.h>
+#include <Unmarshal_fp.h>
 
 #include <openssl/ecdsa.h>
 
@@ -21,6 +22,7 @@
 
 static char *dir = NULL;
 static TSS_CONTEXT *tssContext;
+static uint32_t count = 1000;
 
 static void tpm2_error(TPM_RC rc, const char *reason)
 {
@@ -241,10 +243,155 @@ int tpm_get_public_point(uint32_t parent, U2F_EC_POINT *pub, uint8_t *handle)
 
 	pt = &out.outPublic.publicArea.unique.ecc;
 	pub->pointFormat = U2F_POINT_UNCOMPRESSED;
-	printf("PUBLIC POINTS  %d,%d\n", pt->x.t.size, pt->y.t.size);
 	memcpy(pub->x, pt->x.t.buffer, pt->x.t.size);
 	memcpy(pub->y, pt->y.t.buffer, pt->y.t.size);
-	printf("DONE\n");
 
+	int i;
+	for (i = 0; i < 65; i++) {
+		printf("%02x:", *(&pub->pointFormat + i));
+		if (i % 15 == 14)
+			printf("\n");
+	}
+	printf("\n");
+
+	return len;
+}
+
+static int tpm2_load_key(uint32_t parent, uint32_t len, uint8_t *key)
+{
+	Load_In in;
+        Load_Out out;
+        TPM_RC rc;
+	const char *reason;
+
+	in.parentHandle = parent;
+	rc = TSS_TPM2B_PUBLIC_Unmarshalu(&in.inPublic, &key, &len, FALSE);
+	if (rc) {
+		reason = "PUBLIC_Unmarshal";
+		goto error;
+	}
+	rc = TSS_TPM2B_PRIVATE_Unmarshalu(&in.inPrivate, &key, &len);
+	if (rc) {
+		reason = "PRIVATE_Unmarshal";
+		goto error;
+	}
+	rc = TSS_Execute(tssContext,
+			 (RESPONSE_PARAMETERS *)&out,
+			 (COMMAND_PARAMETERS *)&in,
+			 NULL,
+			 TPM_CC_Load,
+			 TPM_RS_PW, NULL, 0,
+			 TPM_RH_NULL, NULL, 0);
+	if (rc) {
+		reason= "TPM2_Load";
+		goto error;
+	}
+	return out.objectHandle;
+ error:
+	tpm2_error(rc, reason);
+	return 0;
+}
+
+int tpm_check_key(uint32_t parent, uint8_t len, uint8_t *key)
+{
+	TPM_HANDLE k;
+	TPM_RC rc;
+	int ret = 0;
+
+	rc = tpm2_create();
+	if (rc)
+		return 0;
+
+	parent = tpm2_get_parent(parent);
+
+	k = tpm2_load_key(parent, len, key);
+	if (!k)
+		goto error;
+	ret = 1;
+	tpm2_flush_handle(k);
+ error:
+	tpm2_put_parent(parent);
+	tpm2_delete();
+
+	return ret;
+}
+
+int tpm_sign(uint32_t parent, U2F_AUTHENTICATE_REQ *req, uint8_t *ctr,
+	     uint8_t *sig)
+{
+	TPMT_HA digest;
+	TPM_RC rc;
+	Sign_In in;
+	Sign_Out out;
+	ECDSA_SIG *osig;
+	uint8_t presence[1];
+	BIGNUM *r,*s;
+	int len = 0;
+	TPM_HANDLE k;
+	int i;
+
+	rc = tpm2_create();
+	if (rc)
+		return 0;
+
+	parent = tpm2_get_parent(parent);
+
+	k = tpm2_load_key(parent, req->keyHandleLen, req->keyHandle);
+	tpm2_put_parent(parent);
+
+	if (!k)
+		goto error;
+
+	presence[0] = 1;
+	count++;
+	printf("COUNTER: %d\n", count);
+	for (i = 0; i < U2F_CTR_SIZE; i++) {
+		ctr[i] = (count>>((U2F_CTR_SIZE - i - 1)*8)) & 0xff;
+		printf("ctr[%d]=%d\n", i, ctr[i]);
+	}
+	printf("sizeof presence = %ld\n", sizeof(req->appId));
+
+	digest.hashAlg = TPM_ALG_SHA256;
+	TSS_Hash_Generate(&digest,
+			  sizeof(req->appId), req->appId,
+			  sizeof(presence), presence,
+			  U2F_CTR_SIZE, ctr,
+			  sizeof(req->chal), req->chal,
+			  0, NULL);
+	in.inScheme.details.ecdsa.hashAlg = digest.hashAlg;
+	in.keyHandle = k;
+	in.inScheme.scheme = TPM_ALG_ECDSA;
+	in.digest.t.size = TSS_GetDigestSize(digest.hashAlg);
+	memcpy(in.digest.t.buffer, digest.digest.tssmax, in.digest.t.size);
+	in.validation.tag = TPM_ST_HASHCHECK;
+	in.validation.hierarchy = TPM_RH_NULL;
+	in.validation.digest.t.size = 0;
+	rc = TSS_Execute(tssContext,
+                         (RESPONSE_PARAMETERS *)&out,
+                         (COMMAND_PARAMETERS *)&in,
+                         NULL,
+                         TPM_CC_Sign,
+			 TPM_RS_PW, NULL, 0,
+                         TPM_RH_NULL, NULL, 0);
+        if (rc) {
+                tpm2_error(rc, "TPM2_Sign");
+        }
+	tpm2_flush_handle(k);
+ error:
+	tpm2_delete();
+
+	if (rc == TPM_RC_SUCCESS) {
+		osig = ECDSA_SIG_new();
+		r = BN_bin2bn(out.signature.signature.ecdsa.signatureR.t.buffer,
+			      out.signature.signature.ecdsa.signatureR.t.size,
+			      NULL);
+		s = BN_bin2bn(out.signature.signature.ecdsa.signatureS.t.buffer,
+			      out.signature.signature.ecdsa.signatureS.t.size,
+			      NULL);
+		ECDSA_SIG_set0(osig, r, s);
+		len = i2d_ECDSA_SIG(osig, &sig);
+		ECDSA_SIG_free(osig);
+	}
+	printf("Sig of len %d\n", len);
 	return len;
 }
