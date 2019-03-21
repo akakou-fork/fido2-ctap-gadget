@@ -22,7 +22,6 @@
 
 static char *dir = NULL;
 static TSS_CONTEXT *tssContext;
-static uint32_t count = 1000;
 
 static void tpm2_error(TPM_RC rc, const char *reason)
 {
@@ -40,6 +39,8 @@ static void tpm2_rm_keyfile(TPM_HANDLE key)
         snprintf(keyfile, sizeof(keyfile), "%s/h%08x.bin", dir, key);
         unlink(keyfile);
         snprintf(keyfile, sizeof(keyfile), "%s/hp%08x.bin", dir, key);
+        unlink(keyfile);
+        snprintf(keyfile, sizeof(keyfile), "%s/nvp%08x.bin", dir, key);
         unlink(keyfile);
 }
 
@@ -292,6 +293,139 @@ static int tpm2_load_key(uint32_t parent, uint32_t len, uint8_t *key)
 	return 0;
 }
 
+static int tpm2_rc_is_handle(TPM_RC rc)
+{
+	/* rc also has which handle encoded in it
+	 * so strip that off */
+	return (rc & 0xff) == TPM_RC_HANDLE;
+}
+
+static int tpm2_readpublic_nv(uint32_t nv)
+{
+	NV_ReadPublic_In in;
+	NV_ReadPublic_Out out;
+	TPM_RC rc;
+
+	in.nvIndex = nv;
+
+	rc = TSS_Execute(tssContext,
+			 (RESPONSE_PARAMETERS *)&out,
+			 (COMMAND_PARAMETERS *)&in,
+			 NULL,
+			 TPM_CC_NV_ReadPublic,
+			 TPM_RH_NULL, NULL, 0);
+
+	if (rc) {
+		if (!tpm2_rc_is_handle(rc))
+			tpm2_error(rc, "TPM2_NV_ReadPublic");
+		return rc;
+	}
+
+	if ((out.nvPublic.nvPublic.attributes.val & TPMA_NVA_TPM_NT_MASK) >> 4
+	    == TPM_NT_COUNTER)
+		return rc;
+
+	fprintf(stderr, "NV index %x is not a counter\n", nv);
+
+	return TPM_RC_VALUE;
+}
+
+static int tpm2_read_nv(uint32_t nv, uint64_t *val)
+{
+	NV_Read_In in;
+	NV_Read_Out out;
+	TPM_RC rc;
+	int i;
+
+	in.authHandle = nv;
+	in.nvIndex = nv;
+	in.offset = 0;
+	in.size = sizeof(*val);
+
+	rc = TSS_Execute(tssContext,
+			 (RESPONSE_PARAMETERS *)&out,
+			 (COMMAND_PARAMETERS *)&in,
+			 NULL,
+			 TPM_CC_NV_Read,
+			 TPM_RS_PW, NULL, 0,
+			 TPM_RH_NULL, NULL, 0);
+
+	if (rc) {
+		if (!tpm2_rc_is_handle(rc))
+			tpm2_error(rc, "TPM2_NV_Read");
+		return rc;
+	}
+
+	*val = 0;
+	/* TPM values are big endian */
+	for (i = 0; i < sizeof(*val); i++)
+		*val |= ((uint8_t *)out.data.b.buffer)[i]
+			<< ((sizeof(*val) - i - 1)* 8);
+
+	return rc;
+}
+
+static int tpm2_increment_nv(uint32_t nv, uint64_t *val)
+{
+	NV_Increment_In in;
+	TPM_RC rc;
+
+	printf("NV increment on %x\n", nv);
+
+	/* must do a read first for the TSS to get the nv files */
+	rc = tpm2_readpublic_nv(nv);
+	if (rc)
+		return rc;
+
+	in.authHandle = nv;
+	in.nvIndex = nv;
+
+	rc = TSS_Execute(tssContext,
+			 NULL,
+			 (COMMAND_PARAMETERS *)&in,
+			 NULL,
+			 TPM_CC_NV_Increment,
+			 TPM_RS_PW, NULL, 0,
+			 TPM_RH_NULL, NULL, 0);
+	if (rc != TPM_RC_SUCCESS) {
+		if (tpm2_rc_is_handle(rc))
+			tpm2_error(rc, "TPM2_NV_Increment");
+
+		return rc;
+	}
+
+	rc = tpm2_read_nv(nv, val);
+
+	return rc;
+}
+
+static int tpm2_create_nv(uint32_t nv)
+{
+	return -1;
+}
+
+static int tpm2_get_counter(uint32_t nv)
+{
+	uint64_t val = 0;
+	TPM_RC rc;
+
+	if (nv == 0)
+		/* default NV index */
+		nv = 0x01000101;
+
+	rc = tpm2_increment_nv(nv, &val);
+	if (tpm2_rc_is_handle(rc)) {
+		rc = tpm2_create_nv(nv);
+		if (rc == TPM_RC_SUCCESS)
+			rc = tpm2_increment_nv(nv, &val);
+	}
+
+	tpm2_rm_keyfile(nv);
+
+	/* truncate to 32 bits */
+	return val;
+}
+
 int tpm_check_key(uint32_t parent, uint8_t len, uint8_t *key)
 {
 	TPM_HANDLE k;
@@ -316,8 +450,8 @@ int tpm_check_key(uint32_t parent, uint8_t len, uint8_t *key)
 	return ret;
 }
 
-int tpm_sign(uint32_t parent, U2F_AUTHENTICATE_REQ *req, uint8_t *ctr,
-	     uint8_t *sig)
+int tpm_sign(uint32_t parent, uint32_t counter, U2F_AUTHENTICATE_REQ *req,
+	     uint8_t *ctr, uint8_t *sig)
 {
 	TPMT_HA digest;
 	TPM_RC rc;
@@ -327,6 +461,7 @@ int tpm_sign(uint32_t parent, U2F_AUTHENTICATE_REQ *req, uint8_t *ctr,
 	uint8_t presence[1];
 	BIGNUM *r,*s;
 	int len = 0;
+	int count;
 	TPM_HANDLE k;
 	int i;
 
@@ -343,7 +478,7 @@ int tpm_sign(uint32_t parent, U2F_AUTHENTICATE_REQ *req, uint8_t *ctr,
 		goto error;
 
 	presence[0] = 1;
-	count++;
+	count = tpm2_get_counter(counter);
 	printf("COUNTER: %d\n", count);
 	for (i = 0; i < U2F_CTR_SIZE; i++) {
 		ctr[i] = (count>>((U2F_CTR_SIZE - i - 1)*8)) & 0xff;

@@ -5,14 +5,28 @@ hidgd - hid gadget daemon
 
 Handles the hidg end of a FIDO2 device.  Note that the certificate
 file is simply placed straight into the register reply and therefore
-must be correctly DER encoded.
+must be correctly DER encoded.  The parent is assumed to be the
+storage seed unless you specify something different and the counter NV
+index is asumed to be 01000101.  If the counter NV index doesn't exist
+in the TPM it will be created and thus we can assure that a
+monotonically increasing count is attached to every authentication
+response as required by the standard.
+
+The way the system works is that the registration certificate and key
+are used to sign registration responses, but each registration request
+generates a new TPM key, which is serialized into the registration key
+handle so that when it is presented at authentication time, it can be
+loaded into the TPM.  This is so that the TPM itself never has to
+remember any key information and the only persistent TPM resource used
+is the NV counter index.
 
 [examples]
 
-Create a master parent key and place it at 81000101
+Generate a certificate and key pair for registration
 
-openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:prime256v1 -pkeyopt ec_param_enc:named_curve -out parent_key.key
+openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:prime256v1 -pkeyopt ec_param_enc:named_curve -out reg_key.key
 
-create_tpm2_key --restricted -w parent_key.key parent_key.tpm
+And then generate a self signed DER form certificate with a common
+name:
 
-load_tpm2_key parent_key.tpm 8100101
+openssl req -new -x509 -subj '/CN=My Fido Token/' -key reg_key.key -out reg_key.der -outform DER

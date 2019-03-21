@@ -27,11 +27,14 @@ static void *key;
 
 /* choose TPM default parent */
 static uint32_t parent = 0;
+/* choose the TPM default counter index */
+static uint32_t counter = 0;
 
 static struct option long_options[] = {
 	{"help", 0, 0, 'h'},
 	{"version", 0, 0, 'v'},
 	{"parent", 1, 0, 'p'},
+	{"counter", 1, 0, 'c'},
 	{0, 0, 0, 0,}
 };
 
@@ -41,7 +44,8 @@ static void usage(char *argv0, FILE *f)
 		"Options:\n"
 		"\t-h, --help                print this help message\n"
 		"\t-v, --version             print package version\n"
-		"\t-p, --parent              Specify the parent key\n"
+		"\t-p, --parent <key>        Specify the parent key\n"
+		"\t-c, --counter <nv>        TPM Counter NV index\n"
 		"\n",
 		argv0);
 }
@@ -262,7 +266,7 @@ static void process_authenticate(uint32_t cid, uint8_t ctap[HID_MAX_PAYLOAD])
 			err = U2F_SW_WRONG_DATA;
 		goto send;
 	}
-	len = tpm_sign(parent, req, resp->ctr, resp->sig);
+	len = tpm_sign(parent, counter, req, resp->ctr, resp->sig);
 	if (len) {
 		err = U2F_SW_NO_ERROR;
 		/* tpm_sign returns signature length, so account for
@@ -387,6 +391,9 @@ int main(int argc, char *argv[])
 			exit(0);
 		case 'p':
 			parent = strtoul(optarg, NULL, 16);
+			break;
+		case 'c':
+			counter = strtoul(optarg, NULL, 16);
 			break;
 		default:
 			usage(argv[0], stderr);
