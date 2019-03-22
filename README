@@ -1,0 +1,35 @@
+Using the CTAP hid gadget
+=========================
+
+After compiling the programmes, the fido binary is used to write the
+binary report descriptor to the necessary place in configfs.
+
+The script fido_configfs.sh can be used to set up both ends of the
+gadget.  To be used, the /dev/hidrawX end of the gadget *must* be
+accessible by ordinary users meaning you either give the gadget an ID
+matching the one udev will append the uaccess tag, which gives a
+current user ACL.  Alternatively you can simply chmod 666 the new
+hidrawX device.
+
+Ideally, you should also run the hidgd as non-root, so you'll have to
+change the permissions on /dev/hidgX to allow that to happen.  Once
+the permissions are sorted out, you need to create an attestation
+certificate and key.  In theory FIDO relying entities use the
+attestation certificate to verify the authenticity of the token, but
+in practice a self signed certificate works.  The certificate must
+represent the public part of a NIST P-256 elliptic curve key becuase
+the standard requires it.
+
+To create the key do
+
+openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:prime256v1 -pkeyopt ec_param_enc:named_curve -out reg_key.key
+
+After which you can create the self signed certificate as
+
+openssl req -new -x509 -subj '/CN=My Fido Token/' -key reg_key.key -out reg_key.der -outform DER
+
+And finally run hidgd as
+
+hidgd /dev/hidg0 reg_key.der reg_key.key
+
+And it should respond to the firefox browser using U2F sites.
