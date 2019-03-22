@@ -80,7 +80,6 @@ static TPM_RC tpm2_create(void)
 		dir = mkdtemp(template);
 	}
 
-	printf("DIR IS %s\n", dir);
 	rc = TSS_SetProperty(tssContext, TPM_DATA_DIR, dir);
 	if (rc) {
 		tpm2_error(rc, "TSS_SetProperty");
@@ -247,14 +246,6 @@ int tpm_get_public_point(uint32_t parent, U2F_EC_POINT *pub, uint8_t *handle)
 	memcpy(pub->x, pt->x.t.buffer, pt->x.t.size);
 	memcpy(pub->y, pt->y.t.buffer, pt->y.t.size);
 
-	int i;
-	for (i = 0; i < 65; i++) {
-		printf("%02x:", *(&pub->pointFormat + i));
-		if (i % 15 == 14)
-			printf("\n");
-	}
-	printf("\n");
-
 	return len;
 }
 
@@ -369,8 +360,6 @@ static int tpm2_increment_nv(uint32_t nv, uint64_t *val)
 {
 	NV_Increment_In in;
 	TPM_RC rc;
-
-	printf("NV increment on %x\n", nv);
 
 	/* must do a read first for the TSS to get the nv files */
 	rc = tpm2_readpublic_nv(nv);
@@ -502,14 +491,12 @@ int tpm_sign(uint32_t parent, uint32_t counter, U2F_AUTHENTICATE_REQ *req,
 	if (!k)
 		goto error;
 
-	presence[0] = 1;
 	count = tpm2_get_counter(counter);
-	printf("COUNTER: %d\n", count);
-	for (i = 0; i < U2F_CTR_SIZE; i++) {
+	for (i = 0; i < U2F_CTR_SIZE; i++)
+		/* copy to big endian counter in U2F packet */
 		ctr[i] = (count>>((U2F_CTR_SIZE - i - 1)*8)) & 0xff;
-		printf("ctr[%d]=%d\n", i, ctr[i]);
-	}
-	printf("sizeof presence = %ld\n", sizeof(req->appId));
+
+	presence[0] = 1;
 
 	digest.hashAlg = TPM_ALG_SHA256;
 	TSS_Hash_Generate(&digest,
@@ -552,6 +539,6 @@ int tpm_sign(uint32_t parent, uint32_t counter, U2F_AUTHENTICATE_REQ *req,
 		len = i2d_ECDSA_SIG(osig, &sig);
 		ECDSA_SIG_free(osig);
 	}
-	printf("Sig of len %d\n", len);
+
 	return len;
 }

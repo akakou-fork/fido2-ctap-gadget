@@ -111,8 +111,6 @@ static int get_payload(U2FHID_FRAME *frame, uint8_t buf[HID_MAX_PAYLOAD])
 
 	memcpy(buf, frame->init.data, count);
 
-	printf("looking for packet of len %d\n", len);
-
 	while (count < len) {
 		int c = read(dev, frame, HID_RPT_SIZE);
 
@@ -204,7 +202,7 @@ static void process_register(uint32_t cid, uint8_t ctap[HID_MAX_PAYLOAD])
 	}
 	*/
 	req = (U2F_REGISTER_REQ *)ptr;
-	printf("chal[0] = %d, appId[0] = %d\n", req->chal[0], req->appId[0]);
+	printf("CTAP MSG: U2F_REGISTER (%lx)\n", *(unsigned long *)req->appId);
 	memset(buf, 0, sizeof(buf));
 	resp->registerId = U2F_REGISTER_ID;
 	resp->keyHandleLen = tpm_get_public_point(parent, &resp->pubKey,
@@ -255,6 +253,9 @@ static void process_authenticate(uint32_t cid, uint8_t ctap[HID_MAX_PAYLOAD])
 		return;
 	}
 
+	printf("CTAP MSG: U2F AUTHENTICATE P1=0x%x (%lx)\n",
+	       ctap[2], *(unsigned long *)req->appId);
+
 	memset(buf, 0, sizeof(buf));
 
 	if (ctap[2] == U2F_AUTH_CHECK_ONLY) {
@@ -295,19 +296,16 @@ static void process_msg(U2FHID_FRAME *frame)
 		return;
 	}
 	ins = ctap[1];
-	printf("Got CLA=0x%x, ins=0x%x\n", ctap[0], ins);
 
 	if (ins == U2F_VERSION) {
-		printf("U2F VERSION\n");
+		printf("CTAP MSG: U2F VERSION\n");
 		process_version(cid);
 	} else if (ins == U2F_REGISTER) {
-		printf("U2F REGISTER\n");
 		process_register(cid, ctap);
 	} else if (ins == U2F_AUTHENTICATE) {
-		printf("U2F_AUTHENTICATE\n");
 		process_authenticate(cid, ctap);
 	} else {
-		printf("Unrecognized command 0x%x\n", ins);
+		fprintf(stderr, "CTAP MSG: Unrecognized command 0x%x\n", ins);
 		process_error(cid, ERR_INVALID_CMD);
 	}
 }
@@ -318,7 +316,6 @@ static void process_init(U2FHID_FRAME *frame)
 	U2FHID_FRAME *reply = (U2FHID_FRAME *)buf;
 	U2FHID_INIT_REQ *req = (U2FHID_INIT_REQ *)frame->init.data;
 	U2FHID_INIT_RESP *resp = (U2FHID_INIT_RESP *)reply->init.data;
-	int count;
 
 	if (MSG_LEN(*frame) != sizeof(U2FHID_INIT_REQ)) {
 		fprintf(stderr, "INIT message wrong length %d != %ld\n",
@@ -337,28 +334,23 @@ static void process_init(U2FHID_FRAME *frame)
 	reply->init.cmd = U2FHID_INIT;
 	reply->init.bcnth = 0;
 	reply->init.bcntl = sizeof(*resp);
-	printf("setting reply size to %ld\n", sizeof(*resp));
 	memcpy(resp->nonce, req->nonce, sizeof(req->nonce));
 	resp->cid = 1;
 	resp->versionInterface = U2FHID_IF_VERSION;
 
-	count = write(dev, buf, sizeof(buf));
-	printf("written %d bytes\n", count);
+	write(dev, buf, sizeof(buf));
 }
 
 static void command_loop(void)
 {
-	int count;
 	uint8_t buf[HID_RPT_SIZE];
 	U2FHID_FRAME *frame = (U2FHID_FRAME *)buf;
 
-	count = read(dev, buf, sizeof(buf));
-	printf("received %d bytes\n", count);
+	read(dev, buf, sizeof(buf));
 	if (frame->init.cmd == U2FHID_INIT) {
-		printf("Got INIT\n");
+		printf("CTAP INIT\n");
 		process_init(frame);
 	} else if (frame->init.cmd == U2FHID_MSG){
-		printf("Got MSG\n");
 		process_msg(frame);
 	} else {
 		printf("Got unknown command 0x%x\n", FRAME_CMD(*frame));
