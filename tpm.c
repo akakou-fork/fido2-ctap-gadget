@@ -401,7 +401,32 @@ static int tpm2_increment_nv(uint32_t nv, uint64_t *val)
 
 static int tpm2_create_nv(uint32_t nv)
 {
-	return -1;
+	NV_DefineSpace_In in;
+	TPM_RC rc;
+
+	in.authHandle = TPM_RH_OWNER;
+	in.auth.b.size = 0;
+	in.publicInfo.nvPublic.attributes.val = TPMA_NVA_COUNTER |
+		TPMA_NVA_NO_DA |
+		TPMA_NVA_AUTHREAD |
+		TPMA_NVA_AUTHWRITE;
+	in.publicInfo.nvPublic.dataSize = 8;
+	in.publicInfo.nvPublic.authPolicy.t.size = 0;
+	in.publicInfo.nvPublic.nvIndex = nv;
+	in.publicInfo.nvPublic.nameAlg = TPM_ALG_SHA256;
+
+	rc = TSS_Execute(tssContext,
+			 NULL,
+			 (COMMAND_PARAMETERS *)&in,
+			 NULL,
+			 TPM_CC_NV_DefineSpace,
+			 TPM_RS_PW, NULL, 0,
+			 TPM_RH_NULL, NULL, 0);
+	if (rc)
+		tpm2_error(rc, "TPM2_NV_DefineSpace");
+
+	printf("Created new TPM NV Counter at %x\n", nv);
+	return rc;
 }
 
 static int tpm2_get_counter(uint32_t nv)
