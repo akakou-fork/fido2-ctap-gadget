@@ -67,7 +67,9 @@ $report_desc  functions/hid.usb0/report_desc || exit 1
 # now link the config to the interface
 ##
 ln -s functions/hid.usb0 configs/c.1/
-modprobe dummy_hcd
-echo "dummy_udc.0" > UDC
+# modprobe dummy_hcd
+# echo "dummy_udc.0" > UDC
+
+ls /sys/class/udc > UDC
 
 
