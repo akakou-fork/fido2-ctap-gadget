@@ -38,7 +38,7 @@ main(int argc, char *argv[])
 {
 	int fd;
 
-	printf("size is %ld\n", sizeof(report_desc));
+	printf("size is %d\n", sizeof(report_desc));
 	if (argc != 2)
 		exit(0);
 	printf("writing file\n");

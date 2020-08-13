@@ -186,7 +186,7 @@ static void process_register(uint32_t cid, uint8_t ctap[HID_MAX_PAYLOAD])
 
 	len = get_apdu(&ptr);
 	if (len != sizeof(U2F_REGISTER_REQ)) {
-		fprintf(stderr, "Wrong REGISTER REQ len %d != %ld\n",
+		fprintf(stderr, "Wrong REGISTER REQ len %d != %d\n",
 			len, sizeof(U2F_REGISTER_REQ));
 		process_error(cid, ERR_INVALID_CMD);
 		return;
@@ -195,7 +195,7 @@ static void process_register(uint32_t cid, uint8_t ctap[HID_MAX_PAYLOAD])
 	 * standard seems to require this but Mozilla doesn't transmit it
 	len = get_apdu(&ptr);
 	if (len < sizeof(U2F_REGISTER_RESP)) {
-		fprintf(stderr, "Wrong REGISTER RESP len %d < %ld\n",
+		fprintf(stderr, "Wrong REGISTER RESP len %d < %d\n",
 			len, sizeof(U2F_REGISTER_RESP));
 		process_error(cid, ERR_INVALID_CMD);
 		return;
@@ -238,7 +238,7 @@ static void process_authenticate(uint32_t cid, uint8_t ctap[HID_MAX_PAYLOAD])
 	 * standard seems to require this but Mozilla doesn't transmit it
 	len = get_apdu(&ptr);
 	if (len < sizeof(U2F_AUTHENTICATE_RESP)) {
-		fprintf(stderr, "Wrong AUTHENTICATE RESP len %d < %ld\n",
+		fprintf(stderr, "Wrong AUTHENTICATE RESP len %d < %d\n",
 			len, sizeof(U2F_AUTHENTICATE_RESP));
 		process_error(cid, ERR_INVALID_CMD);
 		return;
@@ -247,7 +247,7 @@ static void process_authenticate(uint32_t cid, uint8_t ctap[HID_MAX_PAYLOAD])
 	req = (U2F_AUTHENTICATE_REQ *)ptr;
 
 	if (len != U2F_CHAL_SIZE + U2F_APPID_SIZE + 1 + req->keyHandleLen) {
-		fprintf(stderr, "Wrong AUTHENTICATE REQ len %d > %ld\n",
+		fprintf(stderr, "Wrong AUTHENTICATE REQ len %d > %d\n",
 			len, sizeof(U2F_AUTHENTICATE_REQ));
 		process_error(cid, ERR_INVALID_CMD);
 		return;
@@ -318,7 +318,7 @@ static void process_init(U2FHID_FRAME *frame)
 	U2FHID_INIT_RESP *resp = (U2FHID_INIT_RESP *)reply->init.data;
 
 	if (MSG_LEN(*frame) != sizeof(U2FHID_INIT_REQ)) {
-		fprintf(stderr, "INIT message wrong length %d != %ld\n",
+		fprintf(stderr, "INIT message wrong length %d != %d\n",
 			MSG_LEN(*frame),
 			sizeof(U2FHID_INIT_REQ));
 		process_error(frame->cid, ERR_INVALID_LEN);
